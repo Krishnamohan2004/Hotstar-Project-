@@ -1,3 +1,4 @@
+
 name: Hotstar Project CI/CD - Docker + ECR + ECS Deploy
 
 on:
@@ -11,17 +12,21 @@ jobs:
     env:
       ECR_REGISTRY: 312846472889.dkr.ecr.ap-south-2.amazonaws.com
       ECR_REPOSITORY: hotstar/hotstar-project
-      IMAGE_TAG: latest
       ECS_CLUSTER: project4
       ECS_SERVICE: my-service
-      EXECUTION_ROLE_ARN: arn:aws:iam::312846472889:role/ecsTaskExecutionRole-hotstar
+      EXECUTION_ROLE_ARN: arn:aws:iam::312846472889:role/ecsTaskExecutionRole
 
     steps:
       # 1️⃣ Checkout repository
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2️⃣ Configure AWS credentials
+      # 2️⃣ Get Git commit hash for versioning
+      - name: Get Git commit hash
+        id: git-info
+        run: echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      # 3️⃣ Configure AWS credentials
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -29,49 +34,66 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 3️⃣ Login to Amazon ECR
+      # 4️⃣ Login to Amazon ECR
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 4️⃣ Ensure ECR repository exists
+      # 5️⃣ Ensure ECR repository exists
       - name: Ensure ECR Repository Exists
         run: |
           aws ecr describe-repositories --repository-names $ECR_REPOSITORY || \
           aws ecr create-repository --repository-name $ECR_REPOSITORY
 
-      # 5️⃣ Build, tag & push Docker image
+      # 6️⃣ Build, tag & push Docker image
       - name: Build, Tag & Push Docker Image
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          IMAGE_TAG_SHORT=$COMMIT_HASH
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG_SHORT .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG_SHORT $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG_SHORT
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        env:
+          COMMIT_HASH: ${{ env.COMMIT_HASH }}
 
-      # 6️⃣ Render ECS Task Definition dynamically
+      # 7️⃣ Render ECS Task Definition dynamically
       - name: Render ECS Task Definition
         id: render-task-def
         run: |
+          IMAGE_TAG=$COMMIT_HASH
           cat > task-def.json <<EOF
           {
             "family": "hotstar-task",
-            "networkMode": "awsvpc",
             "executionRoleArn": "$EXECUTION_ROLE_ARN",
+            "networkMode": "awsvpc",
             "requiresCompatibilities": ["FARGATE"],
-            "cpu": "512",
-            "memory": "1024",
+            "cpu": "1024",
+            "memory": "3072",
             "containerDefinitions": [
               {
                 "name": "hotstar-container",
                 "image": "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG",
                 "essential": true,
                 "portMappings": [
-                  { "containerPort": 3000, "hostPort": 3000, "protocol": "tcp" }
-                ]
+                  { "containerPort": 80, "hostPort": 80, "protocol": "tcp" }
+                ],
+                "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                    "awslogs-group": "/ecs/hotstar-task",
+                    "awslogs-create-group": "true",
+                    "awslogs-region": "${{ secrets.AWS_REGION }}",
+                    "awslogs-stream-prefix": "ecs"
+                  }
+                }
               }
             ]
           }
           EOF
           echo "::set-output name=task-def::$(cat task-def.json)"
+        env:
+          COMMIT_HASH: ${{ env.COMMIT_HASH }}
 
-      # 7️⃣ Deploy to ECS
+      # 8️⃣ Deploy to ECS
       - name: Deploy to Amazon ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
