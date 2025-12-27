@@ -10,12 +10,20 @@ jobs:
     name: Build, Push to ECR & Deploy to ECS
     runs-on: ubuntu-latest
 
+    env:
+      ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+      ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+      IMAGE_TAG: latest
+      ECS_CLUSTER: project4
+      ECS_SERVICE: my-service
+      EXECUTION_ROLE_ARN: arn:aws:iam::312846472889:role/ecsTaskExecutionRole-hotstar
+
     steps:
-      # Step 1️⃣ - Checkout repository code
+      # Step 1 - Checkout code
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Step 2️⃣ - Configure AWS credentials
+      # Step 2 - Configure AWS credentials
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -23,43 +31,66 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # Step 3️⃣ - Login to Amazon ECR
+      # Step 3 - Login to Amazon ECR
       - name: Login to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Step 4️⃣ - Create ECR repository if it doesn't exist
+      # Step 4 - Create ECR repo if it doesn't exist
       - name: Ensure ECR Repository Exists
         run: |
-          aws ecr describe-repositories --repository-names ${{ secrets.ECR_REPOSITORY }} || \
-          aws ecr create-repository --repository-name ${{ secrets.ECR_REPOSITORY }}
+          aws ecr describe-repositories --repository-names $ECR_REPOSITORY || \
+          aws ecr create-repository --repository-name $ECR_REPOSITORY
 
-      # Step 5️⃣ - Build, Tag, and Push Docker image to ECR
-      - name: Build, Tag, and Push Docker image
-        env:
-          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
-          IMAGE_TAG: latest
+      # Step 5 - Build Docker image
+      - name: Build Docker Image
         run: |
           echo "Building Docker image..."
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          echo "Pushing image to ECR..."
+
+      # Step 6 - Push Docker image to ECR
+      - name: Push Docker Image to ECR
+        run: |
+          echo "Pushing Docker image to ECR..."
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-      # Step 6️⃣ - Update ECS Task Definition with new image
-      - name: Render new ECS task definition
+      # Step 7 - Render ECS task definition dynamically
+      - name: Render ECS Task Definition
         id: render-task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: src/ecs-task-def.json
-          container-name: hotstar-container
-          image: ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:latest
+        run: |
+          echo "Generating ECS task definition..."
+          cat > task-def.json <<EOF
+          {
+            "family": "hotstar-task",
+            "networkMode": "awsvpc",
+            "executionRoleArn": "$EXECUTION_ROLE_ARN",
+            "requiresCompatibilities": ["FARGATE"],
+            "cpu": "512",
+            "memory": "1024",
+            "containerDefinitions": [
+              {
+                "name": "hotstar-container",
+                "image": "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG",
+                "essential": true,
+                "portMappings": [
+                  {
+                    "containerPort": 3000,
+                    "hostPort": 3000,
+                    "protocol": "tcp"
+                  }
+                ],
+                "memory": 1024,
+                "cpu": 512
+              }
+            ]
+          }
+          EOF
+          echo "::set-output name=task-def::$(cat task-def.json)"
 
-      # Step 7️⃣ - Deploy the updated task definition to ECS Fargate
-      - name: Deploy to Amazon ECS
+      # Step 8 - Deploy to ECS
+      - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
-          service: my-service
-          cluster: project4
+          task-definition: ${{ steps.render-task-def.outputs.task-def }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
