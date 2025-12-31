@@ -60,27 +60,20 @@ jobs:
           cluster: vcube-137
           wait-for-service-stability: true
 
-      # --------- EKS DEPLOYMENT ----------
+      # --------- EKS ----------
       - name: Update kubeconfig for EKS
         run: |
           aws eks update-kubeconfig \
             --name ${{ secrets.EKS_CLUSTER_NAME }} \
             --region ${{ env.AWS_REGION }}
 
-      - name: Verify k8s manifests exist
-        run: |
-          if [ ! -d k8s ]; then
-            echo "❌ k8s folder missing"
-            exit 1
-          fi
-
       - name: Apply Kubernetes Manifests
         run: |
-          kubectl apply -f k8s/namespace.yaml
-          kubectl apply -f k8s/deployment.yaml -n ${{ secrets.K8S_NAMESPACE }}
-          kubectl apply -f k8s/service.yaml -n ${{ secrets.K8S_NAMESPACE }}
+          kubectl apply -f namespace.yml
+          kubectl apply -f deployment.yml -n ${{ secrets.K8S_NAMESPACE }}
+          kubectl apply -f service.yml -n ${{ secrets.K8S_NAMESPACE }}
 
-      - name: Update EKS Deployment Image
+      - name: Update Deployment Image
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           kubectl set image deployment/Hotstar-Project-deployment \
