@@ -10,6 +10,9 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
+    env:
+      AWS_REGION: ap-south-2
+
     steps:
       - name: 📥 Checkout Code
         uses: actions/checkout@v4
@@ -25,33 +28,29 @@ jobs:
       - name: ⚙ Build React App
         run: CI=false npm run build
 
-      - name: 🔐 Configure AWS
+      - name: 🔐 Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-south-2
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: 🔑 Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: 🐳 Build & Tag Docker Image
+      - name: 🐳 Build, Tag & Push Docker Image
         run: |
           IMAGE_TAG=$(date +%s)
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           docker build -t vcube-137:$IMAGE_TAG .
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          docker tag vcube-137:$IMAGE_TAG $ACCOUNT_ID.dkr.ecr.ap-south-2.amazonaws.com/vcube-137:$IMAGE_TAG
-
-      - name: ⬆ Push Image to ECR
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          docker push $ACCOUNT_ID.dkr.ecr.ap-south-2.amazonaws.com/vcube-137:${{ env.IMAGE_TAG }}
+          docker tag vcube-137:$IMAGE_TAG $ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/vcube-137:$IMAGE_TAG
+          docker push $ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/vcube-137:$IMAGE_TAG
 
       - name: 📝 Update ECS Task Definition
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          sed -i "s|<IMAGE>|$ACCOUNT_ID.dkr.ecr.ap-south-2.amazonaws.com/vcube-137:${{ env.IMAGE_TAG }}|g" task-definition.json
+          sed -i "s|<IMAGE>|$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/vcube-137:${{ env.IMAGE_TAG }}|g" task-definition.json
 
       - name: 🚀 Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
@@ -61,44 +60,31 @@ jobs:
           cluster: vcube-137
           wait-for-service-stability: true
 
-      # --- EKS Deployment ---
+      # --------- EKS DEPLOYMENT ----------
       - name: Update kubeconfig for EKS
         run: |
           aws eks update-kubeconfig \
             --name ${{ secrets.EKS_CLUSTER_NAME }} \
-            --region ${{ secrets.AWS_REGION }}
+            --region ${{ env.AWS_REGION }}
 
-      - name: ✅ Verify k8s files exist
+      - name: Verify k8s manifests exist
         run: |
-          if [ ! -f k8s/namespace.yaml ]; then
-            echo "Error: k8s/namespace.yaml not found"
-            exit 1
-          fi
-          if [ ! -f k8s/deployment.yaml ]; then
-            echo "Error: k8s/deployment.yaml not found"
-            exit 1
-          fi
-          if [ ! -f k8s/service.yaml ]; then
-            echo "Error: k8s/service.yaml not found"
+          if [ ! -d k8s ]; then
+            echo "❌ k8s folder missing"
             exit 1
           fi
 
-      - name: Apply Kubernetes manifests
+      - name: Apply Kubernetes Manifests
         run: |
-          echo "Applying namespace..."
           kubectl apply -f k8s/namespace.yaml
-
-          echo "Applying deployment..."
           kubectl apply -f k8s/deployment.yaml -n ${{ secrets.K8S_NAMESPACE }}
-
-          echo "Applying service..."
           kubectl apply -f k8s/service.yaml -n ${{ secrets.K8S_NAMESPACE }}
 
       - name: Update EKS Deployment Image
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           kubectl set image deployment/Hotstar-Project-deployment \
-            Hotstar-Project-container=$ACCOUNT_ID.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} \
+            Hotstar-Project-container=$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} \
             -n ${{ secrets.K8S_NAMESPACE }}
 
           kubectl rollout status deployment/Hotstar-Project-deployment \
