@@ -61,10 +61,11 @@ jobs:
       - name: 🚀 Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-           task-definition: task-definition.json
-           service: hotstar-service
-           cluster: hotstar-cluster
-           wait-for-service-stability: true
+         task-definition: task-definition.json
+         service: vcube-service
+         cluster: vcube-137
+         wait-for-service-stability: true
+
 
 
 
