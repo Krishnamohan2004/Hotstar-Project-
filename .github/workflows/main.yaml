@@ -22,7 +22,6 @@ jobs:
       - name: 📦 Install Dependencies
         run: npm install
 
-      # CI=false disables ESLint blocking warnings
       - name: ⚙ Build React App
         run: CI=false npm run build
 
@@ -36,17 +35,13 @@ jobs:
       - name: 🔑 Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: 🐳 Build Docker Image
+      - name: 🐳 Build & Tag Docker Image
         run: |
           IMAGE_TAG=$(date +%s)
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           docker build -t vcube-137:$IMAGE_TAG .
-
-      - name: 🏷 Tag Docker Image
-        run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          docker tag vcube-137:${{ env.IMAGE_TAG }} \
-          $ACCOUNT_ID.dkr.ecr.ap-south-2.amazonaws.com/vcube-137:${{ env.IMAGE_TAG }}
+          docker tag vcube-137:$IMAGE_TAG $ACCOUNT_ID.dkr.ecr.ap-south-2.amazonaws.com/vcube-137:$IMAGE_TAG
 
       - name: ⬆ Push Image to ECR
         run: |
@@ -61,35 +56,50 @@ jobs:
       - name: 🚀 Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-         task-definition: task-definition.json
-         service: vcube-service
-         cluster: vcube-137
-         wait-for-service-stability: true
+          task-definition: task-definition.json
+          service: vcube-service
+          cluster: vcube-137
+          wait-for-service-stability: true
 
-      # 7. Update kubeconfig for EKS
-      - name: Update kubeconfig
+      # --- EKS Deployment ---
+      - name: Update kubeconfig for EKS
         run: |
-         aws eks update-kubeconfig \
-          --name ${{ secrets.EKS_CLUSTER_NAME }} \
-          --region ${{ secrets.AWS_REGION }}
-          
-    # 🚀 CREATE NAMESPACE IF NOT PRESENT
-      - name: Apply namespace manifest
+          aws eks update-kubeconfig \
+            --name ${{ secrets.EKS_CLUSTER_NAME }} \
+            --region ${{ secrets.AWS_REGION }}
+
+      - name: ✅ Verify k8s files exist
         run: |
+          if [ ! -f k8s/namespace.yaml ]; then
+            echo "Error: k8s/namespace.yaml not found"
+            exit 1
+          fi
+          if [ ! -f k8s/deployment.yaml ]; then
+            echo "Error: k8s/deployment.yaml not found"
+            exit 1
+          fi
+          if [ ! -f k8s/service.yaml ]; then
+            echo "Error: k8s/service.yaml not found"
+            exit 1
+          fi
+
+      - name: Apply Kubernetes manifests
+        run: |
+          echo "Applying namespace..."
           kubectl apply -f k8s/namespace.yaml
-          kubectl apply -f k8s/deployment.yaml -n ${{ secrets.K8S_NAMESPACE }}
-          kubectl apply -f k8s/service.yaml
 
-    # 8. Deploy to EKS
-      - name: Deploy to EKS
+          echo "Applying deployment..."
+          kubectl apply -f k8s/deployment.yaml -n ${{ secrets.K8S_NAMESPACE }}
+
+          echo "Applying service..."
+          kubectl apply -f k8s/service.yaml -n ${{ secrets.K8S_NAMESPACE }}
+
+      - name: Update EKS Deployment Image
         run: |
-         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           kubectl set image deployment/Hotstar-Project-deployment \
             Hotstar-Project-container=$ACCOUNT_ID.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} \
             -n ${{ secrets.K8S_NAMESPACE }}
 
           kubectl rollout status deployment/Hotstar-Project-deployment \
             -n ${{ secrets.K8S_NAMESPACE }} --timeout=200s
-
-
-          
