@@ -58,13 +58,14 @@ jobs:
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           sed -i "s|<IMAGE>|$ACCOUNT_ID.dkr.ecr.ap-south-2.amazonaws.com/vcube-137:${{ env.IMAGE_TAG }}|g" task-definition.json
 
-      - name: Deploy to Amazon ECS
+      - name: 🚀 Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          task-definition: new-task.json
-          service: ${{ secrets.ECS_SERVICE }}
-          cluster: ${{ secrets.ECS_CLUSTER }}
-          wait-for-service-stability: true
+           task-definition: task-definition.json
+           service: hotstar-service
+           cluster: hotstar-cluster
+           wait-for-service-stability: true
+
 
 
           
