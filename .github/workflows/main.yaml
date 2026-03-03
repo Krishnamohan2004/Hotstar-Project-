@@ -42,6 +42,7 @@ jobs:
       - name: Build Project
         run: npm run build
 
+
       # 6️⃣ SonarQube Scan (for React / JS)
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v2
